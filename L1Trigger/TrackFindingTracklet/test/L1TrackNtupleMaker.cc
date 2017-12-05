@@ -54,6 +54,9 @@
 // PHYSICS TOOLS
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 
+
+#include "L1Trigger/TrackFindingTracklet/interface/TiltedGeometryInfo.hh"
+
 ///////////////
 // ROOT HEADERS
 #include <TROOT.h>
@@ -134,6 +137,8 @@ private:
   edm::EDGetTokenT< std::vector< TrackingParticle > > TrackingParticleToken_;
   edm::EDGetTokenT< std::vector< TrackingVertex > > TrackingVertexToken_;
 
+  edm::FileInPath tiltedGeometryFile;
+
 
   //-----------------------------------------------------------------------------------------------
   // tree & branches for mini-ntuple
@@ -198,6 +203,14 @@ private:
   std::vector<float>* m_allstub_trigPos;
   std::vector<float>* m_allstub_trigBend;
 
+  std::vector<unsigned int>* m_allstub_stackid;
+  std::vector<float> * m_allstub_det_r;
+  std::vector<float> * m_allstub_det_tiltAngle;
+  std::vector<float> * m_allstub_det_sensorSpacing;
+  std::vector<float> * m_allstub_det_pitch;
+  std::vector<float> * m_allstub_det_theta0;
+  std::vector<float> * m_allstub_ptFromBend;
+
   // stub associated with tracking particle ?
   std::vector<int>*   m_allstub_matchTP_pdgid; // -999 if not matched
   std::vector<float>* m_allstub_matchTP_pt;    // -999 if not matched
@@ -241,6 +254,8 @@ L1TrackNtupleMaker::L1TrackNtupleMaker(edm::ParameterSet const& iConfig) :
   TrackingParticleInputTag = iConfig.getParameter<edm::InputTag>("TrackingParticleInputTag");
   TrackingVertexInputTag = iConfig.getParameter<edm::InputTag>("TrackingVertexInputTag");
 
+  tiltedGeometryFile = iConfig.getParameter<edm::FileInPath> ("tiltedGeometryFile");
+
   ttTrackToken_ = consumes< std::vector< TTTrack< Ref_Phase2TrackerDigi_ > > >(L1TrackInputTag);
   ttTrackMCTruthToken_ = consumes< TTTrackAssociationMap< Ref_Phase2TrackerDigi_ > >(MCTruthTrackInputTag);
 
@@ -250,6 +265,11 @@ L1TrackNtupleMaker::L1TrackNtupleMaker(edm::ParameterSet const& iConfig) :
 
   TrackingParticleToken_ = consumes< std::vector< TrackingParticle > >(TrackingParticleInputTag);
   TrackingVertexToken_ = consumes< std::vector< TrackingVertex > >(TrackingVertexInputTag);
+
+  //Read in the tilted geometry csv
+  cout << "Initializing Tilted Geometry info from file:" << tiltedGeometryFile.fullPath()<<endl;
+  TiltedGeometryInfo *tgi = TiltedGeometryInfo::getInstance(tiltedGeometryFile.fullPath());
+
 
 }
 
@@ -335,6 +355,14 @@ void L1TrackNtupleMaker::beginJob()
   m_allstub_trigPos      = new std::vector<float>;
   m_allstub_trigBend     = new std::vector<float>;
 
+  m_allstub_stackid = new std::vector<unsigned int>;
+  m_allstub_det_r = new std::vector<float>;
+  m_allstub_det_tiltAngle = new std::vector<float>;
+  m_allstub_det_sensorSpacing = new std::vector<float>;
+  m_allstub_det_pitch = new std::vector<float>;
+  m_allstub_det_theta0 = new std::vector<float>;
+  m_allstub_ptFromBend = new std::vector<float>;
+
   m_allstub_matchTP_pdgid = new std::vector<int>;
   m_allstub_matchTP_pt    = new std::vector<float>;
   m_allstub_matchTP_eta   = new std::vector<float>;
@@ -403,6 +431,16 @@ void L1TrackNtupleMaker::beginJob()
     eventTree->Branch("allstub_trigOffset", &m_allstub_trigOffset);
     eventTree->Branch("allstub_trigPos", &m_allstub_trigPos);
     eventTree->Branch("allstub_trigBend", &m_allstub_trigBend);
+
+    eventTree->Branch("allstub_stackid", &m_allstub_stackid);
+    eventTree->Branch("allstub_det_r", &m_allstub_det_r);
+    eventTree->Branch("allstub_det_tiltAngle", &m_allstub_det_tiltAngle);
+    eventTree->Branch("allstub_det_sensorSpacing", &m_allstub_det_sensorSpacing);
+    eventTree->Branch("allstub_det_pitch", &m_allstub_det_pitch);
+    eventTree->Branch("allstub_det_theta0", &m_allstub_det_theta0);
+
+    eventTree->Branch("allstub_ptFromBend", &m_allstub_ptFromBend);
+
 
     eventTree->Branch("allstub_matchTP_pdgid", &m_allstub_matchTP_pdgid);
     eventTree->Branch("allstub_matchTP_pt", &m_allstub_matchTP_pt);
@@ -487,6 +525,14 @@ void L1TrackNtupleMaker::analyze(const edm::Event& iEvent, const edm::EventSetup
     m_allstub_trigOffset->clear();
     m_allstub_trigPos->clear();
     m_allstub_trigBend->clear();
+
+    m_allstub_stackid->clear();
+    m_allstub_det_r->clear();
+    m_allstub_det_tiltAngle->clear();
+    m_allstub_det_sensorSpacing->clear();
+    m_allstub_det_pitch->clear();
+    m_allstub_det_theta0->clear();
+    m_allstub_ptFromBend->clear();
 
     m_allstub_matchTP_pdgid->clear();
     m_allstub_matchTP_pt->clear();
@@ -596,6 +642,25 @@ void L1TrackNtupleMaker::analyze(const edm::Event& iEvent, const edm::EventSetup
 	float trigOffset = tempStubPtr->getTriggerOffset();
 	float trigPos = tempStubPtr->getTriggerPosition();
 	float trigBend = tempStubPtr->getTriggerBend();
+
+    //Let's unpack the constants needed to reconstruct pt from bend here
+    TiltedGeometryInfo *tgi = TiltedGeometryInfo::getInstance();
+    unsigned int detId = stackDetid.rawId();
+    double r = tgi->r(detId);
+    double tiltAngle = tgi->tiltAngle(detId);
+    double sensorSpacing = tgi->sensorSpacing(detId);
+
+    m_allstub_stackid->push_back(stackDetid.rawId());
+    m_allstub_det_r->push_back(r);
+    m_allstub_det_tiltAngle->push_back(tiltAngle);
+    m_allstub_det_sensorSpacing->push_back(sensorSpacing);
+
+    //Patrick, fill these out
+    m_allstub_det_pitch->push_back(-999);
+    m_allstub_det_theta0->push_back(-999);
+
+    //Patrick, this too!
+    m_allstub_ptFromBend->push_back(-999);
 
 	m_allstub_x->push_back(tmp_stub_x);
 	m_allstub_y->push_back(tmp_stub_y);
